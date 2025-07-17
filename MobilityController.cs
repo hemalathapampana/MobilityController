@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
@@ -3648,11 +3648,72 @@ namespace KeySys.BaseMultiTenant.Controllers
                             newIMEI = model.NewIMEIs[modelDevice.index];
                         }
 
-                        deviceChanges.Add(new Mobility_DeviceChange(CreateUpdateICCIDorIMEIChangeRequest(newICCID, newIMEI, device, device.ServiceZipCode, CommonStrings.UpdateICCIDorIMEIReasonCode, device.TechnologyType, model), device.id, device.ICCID, phoneNumber, createdBy));
+                        // Update - ICCID/IMEI swap - validate SIMType compatibility using IMEI ranges
+                        var validationError = ValidateIMEIeSIMCompatibility(awxDb, device.IMEI, newIMEI);
+                        if (!string.IsNullOrEmpty(validationError))
+                        {
+                            deviceChanges.Add(CreateDeviceChangeError(phoneNumber, validationError, createdBy));
+                        }
+                        else
+                        {
+                            deviceChanges.Add(new Mobility_DeviceChange(CreateUpdateICCIDorIMEIChangeRequest(newICCID, newIMEI, device, device.ServiceZipCode, CommonStrings.UpdateICCIDorIMEIReasonCode, device.TechnologyType, model), device.id, device.ICCID, phoneNumber, createdBy));
+                        }
                     }
                 }
             }
             return deviceChanges;
+        }
+
+        private static string ValidateIMEIeSIMCompatibility(AltaWorxCentral_Entities awxDb, string oldIMEI, string newIMEI)
+        {
+            // Skip validation if newIMEI is empty (no IMEI change)
+            if (string.IsNullOrWhiteSpace(newIMEI))
+            {
+                return string.Empty;
+            }
+
+            bool oldIMEIHasESIM = false;
+            bool newIMEIHasESIM = false;
+
+            try
+            {
+                // Check SIMType for oldIMEI
+                if (!string.IsNullOrWhiteSpace(oldIMEI) && long.TryParse(oldIMEI, out var oldImeiNumeric))
+                {
+                    oldIMEIHasESIM = awxDb.IMEI_DeviceType_CarrierRatePlan
+                        .Where(x => x.IsActive &&
+                                    long.TryParse(x.FromIMEI, out var fromImei) &&
+                                    long.TryParse(x.ToIMEI, out var toImei) &&
+                                    oldImeiNumeric >= fromImei &&
+                                    oldImeiNumeric <= toImei)
+                        .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
+                }
+
+                // Check SIMType for newIMEI
+                if (!string.IsNullOrWhiteSpace(newIMEI) && long.TryParse(newIMEI, out var newImeiNumeric))
+                {
+                    newIMEIHasESIM = awxDb.IMEI_DeviceType_CarrierRatePlan
+                        .Where(x => x.IsActive &&
+                                    long.TryParse(x.FromIMEI, out var fromImei) &&
+                                    long.TryParse(x.ToIMEI, out var toImei) &&
+                                    newImeiNumeric >= fromImei &&
+                                    newImeiNumeric <= toImei)
+                        .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
+                }
+
+                // Throw error if eSIM device is being swapped with non-eSIM
+                if (oldIMEIHasESIM && !newIMEIHasESIM)
+                {
+                    return "ICCID/IMEI swap failed. Device requires an eSIM profile.";
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Error validating IMEI eSIM compatibility: {ex.Message} {ex.StackTrace}", ex);
+                return "Error validating IMEI eSIM compatibility. Please contact support.";
+            }
+
+            return string.Empty; // No validation error
         }
 
         private static string CreateUpdateICCIDorIMEIChangeRequest(string iccid, string imei, MobilityDevice device, string zipCode, string reasonCode, string technologyType, BulkchangeUpdateICCIDorIMEI model)
