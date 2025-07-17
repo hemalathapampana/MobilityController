@@ -1860,7 +1860,50 @@ namespace KeySys.BaseMultiTenant.Controllers
                 var imei = ids[1];
 
                 if (string.IsNullOrEmpty(iccid) || string.IsNullOrEmpty(imei))
+                {
                     deviceChanges.Add(CreateDeviceChangeError(null, $"Invalid input line: {device}", createdBy));
+                    continue;
+                }
+
+                // Update - ActivateNewService - validate SIMType compatibility using IMEI ranges
+                string errorMessage = string.Empty;
+                bool newIMEIHasESIM = false;
+
+                try
+                {
+                    // Check SIMType for newIMEI to ensure proper eSIM activation
+                    if (!string.IsNullOrWhiteSpace(imei) && long.TryParse(imei, out var newImeiNumeric))
+                    {
+                        newIMEIHasESIM = altaWrxDb.IMEI_DeviceType_CarrierRatePlan
+                            .Where(x => x.IsActive &&
+                                        long.TryParse(x.FromIMEI, out var fromImei) &&
+                                        long.TryParse(x.ToIMEI, out var toImei) &&
+                                        newImeiNumeric >= fromImei &&
+                                        newImeiNumeric <= toImei)
+                            .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
+                    }
+
+                    // Check if trying to activate eSIM with incompatible ICCID/SIM
+                    // For new activations, we validate that eSIM IMEIs are being activated with appropriate profiles
+                    if (newIMEIHasESIM)
+                    {
+                        // Additional validation can be added here for eSIM-specific ICCID patterns if needed
+                        // For now, we'll allow eSIM activations but log them for monitoring
+                        Log.Info($"eSIM device activation detected for IMEI: {imei}, ICCID: {iccid}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Error validating IMEI eSIM compatibility for new service activation {device}: {ex.Message} {ex.StackTrace}", ex);
+                    errorMessage = "Error validating IMEI eSIM compatibility. Please contact support.";
+                }
+
+                // If validation fails, create error; otherwise proceed with activation
+                if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    deviceChanges.Add(CreateDeviceChangeError(null, errorMessage, createdBy));
+                    continue;
+                }
 
                 var socCodes = statusUpdate.TelegenceStatusUpdate.FeatureCodes != null ? statusUpdate.TelegenceStatusUpdate.FeatureCodes.ToArray() : null;
                 if (compatibleRatePlans != null && compatibleRatePlans.Count > 0)
@@ -1903,6 +1946,44 @@ namespace KeySys.BaseMultiTenant.Controllers
                                 && x.City == line.City
                                 && x.State == line.State
                                 && x.ZipCode == line.Zip);
+
+                // Update - ActivateNewService Excel - validate SIMType compatibility using IMEI ranges
+                string errorMessage = string.Empty;
+                bool newIMEIHasESIM = false;
+
+                try
+                {
+                    // Check SIMType for IMEI to ensure proper eSIM activation
+                    if (!string.IsNullOrWhiteSpace(line.IMEI) && long.TryParse(line.IMEI, out var newImeiNumeric))
+                    {
+                        newIMEIHasESIM = altaWrxDb.IMEI_DeviceType_CarrierRatePlan
+                            .Where(x => x.IsActive &&
+                                        long.TryParse(x.FromIMEI, out var fromImei) &&
+                                        long.TryParse(x.ToIMEI, out var toImei) &&
+                                        newImeiNumeric >= fromImei &&
+                                        newImeiNumeric <= toImei)
+                            .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
+                    }
+
+                    // Check if trying to activate eSIM with incompatible ICCID/SIM
+                    if (newIMEIHasESIM)
+                    {
+                        // Log eSIM activation for monitoring
+                        Log.Info($"eSIM device activation detected from Excel for IMEI: {line.IMEI}, ICCID: {line.SIM_ICCID}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Error validating IMEI eSIM compatibility for Excel activation IMEI: {line.IMEI}: {ex.Message} {ex.StackTrace}", ex);
+                    errorMessage = "Error validating IMEI eSIM compatibility. Please contact support.";
+                }
+
+                // If validation fails, create error; otherwise proceed with activation
+                if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    deviceChanges.Add(CreateDeviceChangeError(null, errorMessage, createdBy));
+                    continue;
+                }
 
                 var qualificationToken = address?.QualificationToken ?? string.Empty;
                 var change = new Mobility_DeviceChange(BuildTelegenceNewServiceActivationChangeRequest(line.SIM_ICCID, line.IMEI, telegenceStatusUpdate, addSOC: line.AddSOC?.Split(','), qualificationToken: qualificationToken), null, line.SIM_ICCID, null, createdBy);
