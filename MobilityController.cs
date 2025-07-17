@@ -3637,69 +3637,70 @@ namespace KeySys.BaseMultiTenant.Controllers
                     }
                     else
                     {
-                                        var newICCID = string.Empty;
-                if (model.NewICCIDs != null && model.NewICCIDs.Count > modelDevice.index)
-                {
-                    newICCID = model.NewICCIDs[modelDevice.index];
-                }
-                var newIMEI = string.Empty;
-                if (model.NewIMEIs != null && model.NewIMEIs.Count > modelDevice.index)
-                {
-                    newIMEI = model.NewIMEIs[modelDevice.index];
-                }
+                        var newICCID = string.Empty;
+                        if (model.NewICCIDs != null && model.NewICCIDs.Count > modelDevice.index)
+                        {
+                            newICCID = model.NewICCIDs[modelDevice.index];
+                        }
+                        var newIMEI = string.Empty;
+                        if (model.NewIMEIs != null && model.NewIMEIs.Count > modelDevice.index)
+                        {
+                            newIMEI = model.NewIMEIs[modelDevice.index];
+                        }
 
-                // Update - ICCID/IMEI swap - validate SIMType compatibility using IMEI ranges
-                string oldIMEI = device.IMEI; // from DB record associated with ICCID
-                bool oldIMEIHasESIM = false;
-                bool newIMEIHasESIM = false;
-                string errorMessage = string.Empty;
+                        // Update - ICCID/IMEI swap - validate SIMType compatibility using IMEI ranges
+                        string oldIMEI = device.IMEI; // from DB record associated with ICCID
+                        bool oldIMEIHasESIM = false;
+                        bool newIMEIHasESIM = false;
+                        string errorMessage = string.Empty;
 
-                try
-                {
-                    // Check SIMType for oldIMEI
-                    if (!string.IsNullOrWhiteSpace(oldIMEI) && long.TryParse(oldIMEI, out var oldImeiNumeric))
-                    {
-                        oldIMEIHasESIM = awxDb.IMEI_DeviceType_CarrierRatePlan
-                            .Where(x => x.IsActive &&
-                                        long.TryParse(x.FromIMEI, out var fromImei) &&
-                                        long.TryParse(x.ToIMEI, out var toImei) &&
-                                        oldImeiNumeric >= fromImei &&
-                                        oldImeiNumeric <= toImei)
-                            .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
-                    }
+                        try
+                        {
+                            // Check SIMType for oldIMEI
+                            if (!string.IsNullOrWhiteSpace(oldIMEI) && long.TryParse(oldIMEI, out var oldImeiNumeric))
+                            {
+                                oldIMEIHasESIM = awxDb.IMEI_DeviceType_CarrierRatePlan
+                                    .Where(x => x.IsActive &&
+                                                long.TryParse(x.FromIMEI, out var fromImei) &&
+                                                long.TryParse(x.ToIMEI, out var toImei) &&
+                                                oldImeiNumeric >= fromImei &&
+                                                oldImeiNumeric <= toImei)
+                                    .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
+                            }
 
-                    // Check SIMType for newIMEI (only if newIMEI is provided)
-                    if (!string.IsNullOrWhiteSpace(newIMEI) && long.TryParse(newIMEI, out var newImeiNumeric))
-                    {
-                        newIMEIHasESIM = awxDb.IMEI_DeviceType_CarrierRatePlan
-                            .Where(x => x.IsActive &&
-                                        long.TryParse(x.FromIMEI, out var fromImei) &&
-                                        long.TryParse(x.ToIMEI, out var toImei) &&
-                                        newImeiNumeric >= fromImei &&
-                                        newImeiNumeric <= toImei)
-                            .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
-                    }
+                            // Check SIMType for newIMEI (only if newIMEI is provided)
+                            if (!string.IsNullOrWhiteSpace(newIMEI) && long.TryParse(newIMEI, out var newImeiNumeric))
+                            {
+                                newIMEIHasESIM = awxDb.IMEI_DeviceType_CarrierRatePlan
+                                    .Where(x => x.IsActive &&
+                                                long.TryParse(x.FromIMEI, out var fromImei) &&
+                                                long.TryParse(x.ToIMEI, out var toImei) &&
+                                                newImeiNumeric >= fromImei &&
+                                                newImeiNumeric <= toImei)
+                                    .Any(x => x.SIMType != null && x.SIMType.Contains("eSIM"));
+                            }
 
-                    // Validate if eSIM device is being swapped with non-eSIM
-                    if (!string.IsNullOrWhiteSpace(newIMEI) && oldIMEIHasESIM && !newIMEIHasESIM)
-                    {
-                        errorMessage = "Telegence: ICCID/IMEI swap failed. Device requires an eSIM profile.";
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"Error validating IMEI eSIM compatibility for phone {phoneNumber}: {ex.Message} {ex.StackTrace}", ex);
-                    errorMessage = "Error validating IMEI eSIM compatibility. Please contact support.";
-                }
+                            // Throw error if eSIM device is being swapped with non-eSIM
+                            if (!string.IsNullOrWhiteSpace(newIMEI) && oldIMEIHasESIM && !newIMEIHasESIM)
+                            {
+                                errorMessage = "Telegence: ICCID/IMEI swap failed. Device requires an eSIM profile.";
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error($"Error validating IMEI eSIM compatibility for phone {phoneNumber}: {ex.Message} {ex.StackTrace}", ex);
+                            errorMessage = "Error validating IMEI eSIM compatibility. Please contact support.";
+                        }
 
-                if (!string.IsNullOrEmpty(errorMessage))
-                {
-                    deviceChanges.Add(CreateDeviceChangeError(phoneNumber, errorMessage, createdBy));
-                }
-                else
-                {
-                    deviceChanges.Add(new Mobility_DeviceChange(CreateUpdateICCIDorIMEIChangeRequest(newICCID, newIMEI, device, device.ServiceZipCode, CommonStrings.UpdateICCIDorIMEIReasonCode, device.TechnologyType, model), device.id, device.ICCID, phoneNumber, createdBy));
-                }
+                        // Phone number condition - if validation fails, create error; otherwise create device change
+                        if (!string.IsNullOrEmpty(errorMessage))
+                        {
+                            deviceChanges.Add(CreateDeviceChangeError(phoneNumber, errorMessage, createdBy));
+                        }
+                        else
+                        {
+                            deviceChanges.Add(new Mobility_DeviceChange(CreateUpdateICCIDorIMEIChangeRequest(newICCID, newIMEI, device, device.ServiceZipCode, CommonStrings.UpdateICCIDorIMEIReasonCode, device.TechnologyType, model), device.id, device.ICCID, phoneNumber, createdBy));
+                        }
                     }
                 }
             }
